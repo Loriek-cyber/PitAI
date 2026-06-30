@@ -212,11 +212,12 @@ st.sidebar.caption("F1 AI Race Intelligence • FIA Project 2025")
 # ─── HELPER: FETCH WITH CACHE ─────────────────────────────────────────────────
 @st.cache_data(show_spinner=False)
 def fetch_laps(y, r, drv, live):
-    return data_core.get_race_laps_merged(y, r, drv, live)
+    return data_core.get_laps(y, r, drv, is_live=live)
 
 @st.cache_data(show_spinner=False)
 def fetch_telemetry(y, r, drv, live):
-    return data_core.get_telemetry(y, r, drv, live)
+    _fastest, tel = data_core.get_telemetry(y, r, drv, is_live=live)
+    return tel
 
 # ─── TITLE ─────────────────────────────────────────────────────────────────────
 st.title("F1 AI Race Intelligence")
@@ -250,6 +251,9 @@ with tab1:
                     stats = model_engine.get_real_win_probability(metrics_df, {})
                     if stats:
                         df_stats = pd.DataFrame(stats).sort_values("Probabilità", ascending=True)
+                        # Format probability as percentage for display
+                        df_stats["Prob_display"] = df_stats["Probabilità"].apply(lambda x: f"{x:.1%}")
+
                         fig = px.bar(df_stats, x="Probabilità", y="Pilota", orientation='h',
                                      color="Probabilità", color_continuous_scale=["#161B22", "#E10600", "#FF8700"],
                                      title=f"Probabilità di Vittoria • Giro {sel_lap}")
@@ -257,7 +261,15 @@ with tab1:
                                           paper_bgcolor="rgba(0,0,0,0)", yaxis_categoryorder='total ascending',
                                           coloraxis_showscale=False, height=max(400, len(df_stats)*30))
                         st.plotly_chart(fig, use_container_width=True)
-                        st.dataframe(df_stats.sort_values("Posizione"), use_container_width=True, hide_index=True)
+
+                        # Display the rich table
+                        display_cols = [c for c in ["Posizione", "Pilota", "Prob_display", "Tempo", "Gomma",
+                                                      "Età Gomma", "Andamento", "Finestra Pit", "Carburante",
+                                                      "Pit Stop", "Vel. Max", "Traffico (Stato)"]
+                                        if c in df_stats.columns]
+                        df_show = df_stats[display_cols].sort_values("Posizione")
+                        df_show = df_show.rename(columns={"Prob_display": "Probabilità"})
+                        st.dataframe(df_show, use_container_width=True, hide_index=True)
                     else:
                         st.warning("Nessuna statistica disponibile per questo giro.")
                 else:
@@ -300,15 +312,15 @@ with tab2:
 
                     if starting_lap == 0:
                         try:
-                            q_session = data_core.load_session(year, race, 'Q')
-                            q_lap = data_core.get_qualy_fastest_lap(q_session, drv)
-                        except:
+                            q_session = data_core.load_session(year, str(race), 'Qualifying')
+                            q_lap = data_core.get_qualy_fastest_lap(q_session, drv) if q_session else None
+                        except Exception:
                             q_lap = None
                         c_lap, c_tyre, c_stint = 0, 0, 1
                         c_comp = int(df_train.iloc[0]['Compound_encoded']) if not df_train.empty else 0
                         c_lt = q_lap if q_lap else (float(df_train.iloc[0]['LapTime_sec']) if not df_train.empty else 90.0)
-                        avg_t = float(df_train['AvgThrottle'].mean()) if 'AvgThrottle' in df_train else 0.0
-                        avg_b = float(df_train['AvgBrake'].mean()) if 'AvgBrake' in df_train else 0.0
+                        avg_t = float(df_train['AvgThrottle'].mean()) if 'AvgThrottle' in df_train.columns else 0.0
+                        avg_b = float(df_train['AvgBrake'].mean()) if 'AvgBrake' in df_train.columns else 0.0
                     else:
                         subset = df_train[df_train['LapNumber'] <= starting_lap]
                         if not subset.empty:
@@ -323,7 +335,7 @@ with tab2:
                         else:
                             continue
 
-                    preds = model_engine.predict_future_pace(
+                    preds = model_engine.predict_future_pace_from_state(
                         model, c_lap, c_tyre, c_comp, c_stint, c_lt, avg_t, avg_b, num_predict
                     )
                     if preds is not None and not preds.empty:
@@ -425,17 +437,21 @@ with tab4:
 
                     st.divider()
 
-                    fig_delta = px.bar(h2h_df, x="Lap", y="Delta",
+                    # Use 'LapNumber' which is the canonical column name
+                    x_col = "Lap" if "Lap" in h2h_df.columns else "LapNumber"
+
+                    fig_delta = px.bar(h2h_df, x=x_col, y="Delta",
                                        color="Delta", color_continuous_scale="RdBu_r",
                                        title=f"Delta per Giro (Negativo = {d1} più veloce)")
                     fig_delta.update_layout(template="plotly_dark", plot_bgcolor="rgba(0,0,0,0)",
-                                            paper_bgcolor="rgba(0,0,0,0)", coloraxis_showscale=False, height=400)
+                                            paper_bgcolor="rgba(0,0,0,0)", coloraxis_showscale=False, height=400,
+                                            xaxis_title="Giro")
                     st.plotly_chart(fig_delta, use_container_width=True)
 
                     h2h_df['CumDelta'] = h2h_df['Delta'].cumsum()
                     fig_cum = go.Figure()
                     fig_cum.add_trace(go.Scatter(
-                        x=h2h_df['Lap'], y=h2h_df['CumDelta'],
+                        x=h2h_df[x_col], y=h2h_df['CumDelta'],
                         mode='lines', name='Delta Cumulativo',
                         line=dict(color='#00D2BE', width=3),
                         fill='tozeroy', fillcolor='rgba(0,210,190,0.1)'
@@ -466,31 +482,45 @@ with tab5:
                 metrics_df = data_core.get_lap_metrics(year, race, lap_target)
                 if metrics_df is not None and not metrics_df.empty:
                     stats = model_engine.get_real_win_probability(metrics_df, {})
-                    df_display = pd.DataFrame(stats)
-                    st.dataframe(df_display, use_container_width=True, hide_index=True)
+                    if stats:
+                        df_display = pd.DataFrame(stats)
 
-                    ch1, ch2 = st.columns(2)
+                        # Format probability for display
+                        df_display["Prob_display"] = df_display["Probabilità"].apply(lambda x: f"{x:.1%}")
 
-                    with ch1:
-                        if 'Gomma' in df_display.columns:
-                            compound_counts = df_display['Gomma'].value_counts()
-                            fig_pie = px.pie(values=compound_counts.values, names=compound_counts.index,
-                                             title="Distribuzione Mescole",
-                                             color_discrete_sequence=['#E10600', '#FFF200', '#FFFFFF', '#FF8700'])
-                            fig_pie.update_layout(template="plotly_dark", plot_bgcolor="rgba(0,0,0,0)",
-                                                   paper_bgcolor="rgba(0,0,0,0)", height=350)
-                            st.plotly_chart(fig_pie, use_container_width=True)
+                        # Show the rich data table
+                        display_cols = [c for c in ["Posizione", "Pilota", "Prob_display", "Tempo", "Gomma",
+                                                      "Età Gomma", "Andamento", "Finestra Pit", "Carburante",
+                                                      "Pit Stop", "Accelerazione", "Vel. Max", "Traffico (Stato)"]
+                                        if c in df_display.columns]
+                        df_show = df_display[display_cols].copy()
+                        df_show = df_show.rename(columns={"Prob_display": "Probabilità"})
+                        st.dataframe(df_show, use_container_width=True, hide_index=True)
 
-                    with ch2:
-                        if 'Posizione' in df_display.columns and 'Pilota' in df_display.columns:
-                            df_sorted = df_display.sort_values('Posizione', ascending=True)
-                            fig_pos = px.bar(df_sorted, x='Posizione', y='Pilota', orientation='h',
-                                             title="Classifica al Giro", color='Posizione',
-                                             color_continuous_scale=['#00D2BE', '#161B22'])
-                            fig_pos.update_layout(template="plotly_dark", plot_bgcolor="rgba(0,0,0,0)",
-                                                   paper_bgcolor="rgba(0,0,0,0)", coloraxis_showscale=False,
-                                                   yaxis_categoryorder='total descending', height=350)
-                            st.plotly_chart(fig_pos, use_container_width=True)
+                        ch1, ch2 = st.columns(2)
+
+                        with ch1:
+                            if 'Gomma' in df_display.columns:
+                                compound_counts = df_display['Gomma'].value_counts()
+                                fig_pie = px.pie(values=compound_counts.values, names=compound_counts.index,
+                                                 title="Distribuzione Mescole",
+                                                 color_discrete_sequence=['#E10600', '#FFF200', '#FFFFFF', '#FF8700'])
+                                fig_pie.update_layout(template="plotly_dark", plot_bgcolor="rgba(0,0,0,0)",
+                                                       paper_bgcolor="rgba(0,0,0,0)", height=350)
+                                st.plotly_chart(fig_pie, use_container_width=True)
+
+                        with ch2:
+                            if 'Posizione' in df_display.columns and 'Pilota' in df_display.columns:
+                                df_sorted = df_display.sort_values('Posizione', ascending=True)
+                                fig_pos = px.bar(df_sorted, x='Posizione', y='Pilota', orientation='h',
+                                                 title="Classifica al Giro", color='Posizione',
+                                                 color_continuous_scale=['#00D2BE', '#161B22'])
+                                fig_pos.update_layout(template="plotly_dark", plot_bgcolor="rgba(0,0,0,0)",
+                                                       paper_bgcolor="rgba(0,0,0,0)", coloraxis_showscale=False,
+                                                       yaxis_categoryorder='total descending', height=350)
+                                st.plotly_chart(fig_pos, use_container_width=True)
+                    else:
+                        st.warning("Nessun dato disponibile per questo giro.")
                 else:
                     st.warning("Nessun dato disponibile per questo giro.")
             except Exception as e:

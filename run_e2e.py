@@ -141,7 +141,7 @@ def test_model_pipeline(laps_df: pd.DataFrame, driver: str) -> None:
         return
 
     # Feature engineering
-    features_df = me.prepare_pace_features(laps_df)
+    features_df, le = me.prepare_pace_features(laps_df)
     ok(f"Features prepared: {len(features_df)} rows × {len(features_df.columns)} cols")
 
     if len(features_df) < 5:

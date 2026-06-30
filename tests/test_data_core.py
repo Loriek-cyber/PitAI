@@ -368,6 +368,17 @@ class TestGetFastestLapTelemetry:
 class TestFastF1Methods:
     @patch("data_core.ff1.get_event_schedule")
     def test_get_schedule(self, mock_sched, dc):
+        mock_sched.return_value = pd.DataFrame({
+            "EventName": ["GP1", "GP2", "Pre-Season Test"],
+            "EventFormat": ["conventional", "conventional", "testing"],
+        })
+        sched = dc.get_schedule(2024)
+        # Testing events should be filtered out
+        assert len(sched) == 2
+
+    @patch("data_core.ff1.get_event_schedule")
+    def test_get_schedule_no_format_column(self, mock_sched, dc):
+        """If EventFormat column is missing, return all events."""
         mock_sched.return_value = pd.DataFrame({"EventName": ["GP1", "GP2"]})
         sched = dc.get_schedule(2024)
         assert len(sched) == 2

@@ -20,6 +20,8 @@ dependencies = [
     "scipy>=1.10",
     "scikit-learn>=1.2",
     "termcolor>=2.0",
+    "streamlit>=1.30",
+    "plotly>=5.15",
 ]
 
 [project.optional-dependencies]

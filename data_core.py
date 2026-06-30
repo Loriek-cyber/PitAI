@@ -501,8 +501,13 @@ class DataCore:
     # =======================================================================
 
     def get_schedule(self, year: int) -> pd.DataFrame:
-        """Return the event schedule for *year* via FastF1."""
+        """Return the event schedule for *year* via FastF1.
+
+        Testing events are excluded.
+        """
         schedule = ff1.get_event_schedule(year)
+        if "EventFormat" in schedule.columns:
+            schedule = schedule[schedule["EventFormat"] != "testing"]
         return schedule
 
     def get_drivers_ff1(self, year: int, race: str | int) -> List[str]:
@@ -535,7 +540,8 @@ class DataCore:
     ) -> pd.DataFrame:
         """Return cross-driver metrics for a specific lap via FastF1.
 
-        Columns include: Driver, Position, SpeedST, TrackStatus, Stint.
+        Columns include: Driver, Position, SpeedST, TrackStatus, Stint,
+        LapTime, Compound, TyreLife, LapTime_sec, TotalLaps, LapNumber.
         """
         try:
             session = ff1.get_session(year, race, "R")
@@ -549,7 +555,18 @@ class DataCore:
                 if col in lap_df.columns:
                     cols_keep.append(col)
 
-            return lap_df[cols_keep].reset_index(drop=True)
+            result = lap_df[cols_keep].reset_index(drop=True)
+
+            # Enrich with derived columns needed by ModelEngine.get_real_win_probability
+            if "LapTime" in result.columns:
+                result["LapTime_sec"] = result["LapTime"].dt.total_seconds()
+
+            # Total laps for fuel estimation
+            total_laps = int(session.total_laps) if hasattr(session, "total_laps") and session.total_laps else 70
+            result["TotalLaps"] = total_laps
+            result["LapNumber"] = lap_number
+
+            return result
         except Exception as exc:
             logger.warning("FastF1 get_lap_metrics failed: %s", exc)
         return pd.DataFrame()
@@ -614,7 +631,10 @@ class DataCore:
                 merged["LapTime_D1"].dt.total_seconds()
                 - merged["LapTime_D2"].dt.total_seconds()
             )
-            return merged[["LapNumber", "Delta"]].reset_index(drop=True)
+            result = merged[["LapNumber", "Delta"]].reset_index(drop=True)
+            # Add 'Lap' alias for backward compatibility with app.py
+            result["Lap"] = result["LapNumber"]
+            return result
         except Exception as exc:
             logger.warning("FastF1 head-to-head failed: %s", exc)
         return pd.DataFrame()
@@ -695,3 +715,15 @@ class DataCore:
         if sk is not None:
             return self.get_fastest_lap_telemetry(sk, driver, is_live=is_live)
         return None, pd.DataFrame()
+
+    # Alias for backward compatibility with app.py
+    def get_race_laps_merged(
+        self,
+        year: int,
+        race: str | int,
+        driver: str,
+        is_live: bool = False,
+        session_key: Optional[int] = None,
+    ) -> pd.DataFrame:
+        """Alias for :meth:`get_laps` – kept for backward compatibility."""
+        return self.get_laps(year, race, driver, session_key=session_key, is_live=is_live)
