@@ -177,8 +177,13 @@ year = st.sidebar.selectbox("🗓️ Stagione", list(range(2026, 2019, -1)), ind
 
 @st.cache_data(show_spinner=False)
 def load_schedule(y):
-    try: return data_core.get_schedule(y)
-    except: return ["Monza", "Silverstone", "Spa"]
+    try:
+        schedule = data_core.get_schedule(y)
+        if isinstance(schedule, pd.DataFrame) and "EventName" in schedule.columns:
+            return schedule["EventName"].tolist()
+        return list(schedule)
+    except:
+        return ["Monza", "Silverstone", "Spa"]
 
 available_races = load_schedule(year)
 race = st.sidebar.selectbox("🏁 Gran Premio", available_races)
@@ -236,7 +241,7 @@ with tab1:
     c1.metric("Giri Totali", total_laps)
     c2.metric("Piloti", len(available_drivers))
     c3.metric("Stagione", year)
-    c4.metric("Gran Premio", race[:20])
+    c4.metric("Gran Premio", str(race)[:20])
 
     st.divider()
     st.subheader("🎯 Probabilità di Vittoria per Giro")
